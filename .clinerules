@@ -1,0 +1,54 @@
+# Cline System Rules for Klinciti E-Commerce/Service App
+
+# AI Engine target: Gemini 1.5 Pro / Flash
+
+## 1. Project Context & Architecture
+
+- **App Nature:** Job-based service marketplace and e-commerce platform.
+- **Frontend Stack:** Flutter, Riverpod (StateNotifier/AsyncNotifier), GoRouter, Dio, Socket.io-client.
+- **Backend Stack:** Node.js, Fastify, Kysely (PostgreSQL), Redis (Caching & Pub/Sub), Socket.io, Firebase Admin SDK, gRPC (for microservice comms).
+- **Architecture:** Monorepo/Microservices (catalog, order, payment), Saga pattern for distributed transactions, Event-driven real-time updates.
+
+## 2. General AI Coding Standards
+
+- **No Placeholders:** Never generate `// ... existing code ...` or `// TODO` unless explicitly asked. Output complete, functional code blocks.
+- **Error Handling First:** Always use isolated `try/catch` blocks. Never let unhandled promise rejections crash the Node.js process.
+- **Graceful Degradation:** If a non-critical background task (like FCM dispatch) fails, log it and continue the main execution thread.
+- **No Hallucinated Dependencies:** Only use libraries already present in `pubspec.yaml` or `package.json`.
+
+## 3. Backend Rules (Node.js / Fastify)
+
+- **Validation:** Strictly use `zod` for parsing and validating `req.body`, `req.query`, and `req.params`. Never trust raw client input.
+- **Database (Kysely):**
+  - Always use the strongly-typed Kysely query builder.
+  - Ensure all database timestamps are ISO strings or native `Date` objects depending on the PostgreSQL dialect configuration.
+  - Use transaction blocks (`db.transaction().execute()`) when mutating multiple tables.
+- **Real-Time & Background:**
+  - Fire-and-forget background promises must be wrapped in `Promise.allSettled()` and attached to a `.catch()` logger.
+  - Socket.io must use the `@socket.io/redis-adapter` for horizontal scaling.
+  - Inter-service communication relies on Redis Streams (`xadd`) or gRPC.
+- **Security:**
+  - Enforce `preHandler: [verifyAuth]` on protected routes.
+  - Never leak database connection strings, JWT secrets, or internal stack traces to the client.
+
+## 4. Frontend Rules (Flutter / Dart)
+
+- **State Management (Riverpod):**
+  - Strictly separate UI (`ConsumerWidget`) from business logic (`StateNotifier` / `AsyncNotifier`).
+  - Do not use `StatefulWidget` for global state.
+  - Handle all UI async states natively using `.when(data: ..., loading: ..., error: ...)`.
+- **Navigation (GoRouter):**
+  - Use context-based routing (`context.go()` or `context.push()`).
+  - Never use the legacy `Navigator.push()` API.
+- **Networking (Dio):**
+  - All API calls must go through the global `ApiClient` wrapper to ensure `Bearer` tokens are dynamically injected via interceptors.
+  - Catch and map `DioException` to custom `ApiException` classes for the UI to consume cleanly.
+- **Notifications (FCM & Socket):**
+  - Socket.io handles immediate foreground UI syncing (e.g., Unread Badge increments).
+  - `flutter_local_notifications` must use `Importance.max` and explicit `channelId` to bypass Android OS minimization.
+  - Never attempt to register FCM tokens if the user is unauthenticated (prevents 403 loops).
+
+## 5. Gemini Flash / Pro Specific Directives
+
+- **Low-Level Explanations:** When requested to explain a bug, provide the first-principles reason (e.g., Event Loop blocking, Memory Layout, Async context loss) before providing the fix.
+- **Type Safety:** Ensure strict TypeScript and Dart null-safety. Do not use `any` in TypeScript unless casting third-party dynamic objects. Use `!` in Dart only when absolutely certain the value is non-null by context.
