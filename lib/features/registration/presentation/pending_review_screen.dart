@@ -24,7 +24,7 @@ class _PendingReviewScreenState extends ConsumerState<PendingReviewScreen> {
     setState(() => _isChecking = true);
 
     try {
-      final status = await ref.read(registrationProvider).checkStatus();
+      final status = await ref.read(registrationApiProvider).checkStatus();
       if (!mounted) return;
 
       final modStatus =

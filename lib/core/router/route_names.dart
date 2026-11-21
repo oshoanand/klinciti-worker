@@ -29,4 +29,7 @@ class AppRoutes {
   static const String workerStep4 = '/worker/step-4';
   static const String workerPendingReview = '/worker/pending-review';
   static const String workerRejected = '/worker/rejected';
+
+  static const String paymentMethods = '/profile/payment-methods';
+  static const String workerTransactions = '/profile/transactions';
 }

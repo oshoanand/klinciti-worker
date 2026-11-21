@@ -206,6 +206,35 @@ class ProfileDrawer extends ConsumerWidget {
                       },
                     ),
                     _MenuItem(
+                      icon: LucideIcons.wallet,
+                      title: 'Способы оплаты',
+                      subtitle: 'Привязанные карты для выплат',
+                      iconColor: Colors.teal,
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        context.push(AppRoutes.paymentMethods);
+                      },
+                    ),
+                    _MenuItem(
+                      icon: LucideIcons.arrow_left_right,
+                      title: 'Транзакции',
+                      subtitle: 'История поступлений и списаний',
+                      iconColor: const Color(0xFF2563EB),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        context.push(AppRoutes.workerTransactions);
+                      },
+                    ),
+                    _MenuItem(
+                      icon: LucideIcons.credit_card,
+                      title: 'Реквизиты и ИНН',
+                      subtitle: 'Налоговые данные партнера',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        context.push(AppRoutes.workerStep4);
+                      },
+                    ),
+                    _MenuItem(
                       icon: LucideIcons.bell,
                       title: 'Уведомления',
                       subtitle: 'Оповещения по заказам и системе',

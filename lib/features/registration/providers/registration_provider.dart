@@ -9,7 +9,103 @@ import '../data/category_model.dart';
 
 typedef JsonMap = Map<String, dynamic>;
 
-final registrationProvider = Provider<RegistrationController>((ref) {
+// ==========================================
+// 1. ПРАВОВОЙ СТАТУС И СОСТОЯНИЕ ФОРМЫ
+// ==========================================
+enum LegalType { selfEmployed, ip, ooo }
+
+extension LegalTypeExtension on LegalType {
+  String toBackendString() {
+    switch (this) {
+      case LegalType.selfEmployed:
+        return 'SELF_EMPLOYED';
+      case LegalType.ip:
+        return 'IP';
+      case LegalType.ooo:
+        return 'OOO';
+    }
+  }
+}
+
+class RegistrationState {
+  // Данные Шага 2 (Юридический статус и профиль)
+  final LegalType? legalType;
+  final String? inn;
+  final String? companyName;
+  final String? city;
+  final String? address;
+  final String? experience;
+  final String? description;
+  final bool? hasVehicle;
+  final List<String> selectedCategoryIds;
+
+  // Данные Шага 4 (Банковские реквизиты РФ)
+  final String? bankName;
+  final String? bankBik;
+  final String? checkingAccount;
+  final String? correspondentAccount;
+
+  const RegistrationState({
+    this.legalType,
+    this.inn,
+    this.companyName,
+    this.city,
+    this.address,
+    this.experience,
+    this.description,
+    this.hasVehicle,
+    this.selectedCategoryIds = const [],
+    this.bankName,
+    this.bankBik,
+    this.checkingAccount,
+    this.correspondentAccount,
+  });
+
+  RegistrationState copyWith({
+    LegalType? legalType,
+    String? inn,
+    String? companyName,
+    String? city,
+    String? address,
+    String? experience,
+    String? description,
+    bool? hasVehicle,
+    List<String>? selectedCategoryIds,
+    String? bankName,
+    String? bankBik,
+    String? checkingAccount,
+    String? correspondentAccount,
+  }) {
+    return RegistrationState(
+      legalType: legalType ?? this.legalType,
+      inn: inn ?? this.inn,
+      companyName: companyName ?? this.companyName,
+      city: city ?? this.city,
+      address: address ?? this.address,
+      experience: experience ?? this.experience,
+      description: description ?? this.description,
+      hasVehicle: hasVehicle ?? this.hasVehicle,
+      selectedCategoryIds: selectedCategoryIds ?? this.selectedCategoryIds,
+      bankName: bankName ?? this.bankName,
+      bankBik: bankBik ?? this.bankBik,
+      checkingAccount: checkingAccount ?? this.checkingAccount,
+      correspondentAccount: correspondentAccount ?? this.correspondentAccount,
+    );
+  }
+}
+
+// ==========================================
+// 2. ПРОВАЙДЕРЫ
+// ==========================================
+
+// Провайдер состояния формы (используется на экранах)
+final registrationProvider =
+    NotifierProvider<RegistrationNotifier, RegistrationState>(() {
+      return RegistrationNotifier();
+    });
+
+// Провайдер API контроллера
+final registrationApiProvider = Provider<RegistrationController>((ref) {
   return RegistrationController(
     ref.watch(apiClientProvider),
     ref.watch(uploaderServiceProvider),
@@ -19,9 +115,88 @@ final registrationProvider = Provider<RegistrationController>((ref) {
 final categoriesTreeProvider = FutureProvider.autoDispose<List<CategoryModel>>((
   ref,
 ) async {
-  return ref.read(registrationProvider).fetchCategories();
+  return ref.read(registrationApiProvider).fetchCategories();
 });
 
+// ==========================================
+// 3. NOTIFIER (Локальное сохранение данных между экранами)
+// ==========================================
+class RegistrationNotifier extends Notifier<RegistrationState> {
+  @override
+  RegistrationState build() {
+    return const RegistrationState();
+  }
+
+  void updateStep2({
+    required LegalType legalType,
+    required String inn,
+    String? companyName,
+    required String city,
+    required String address,
+    required String experience,
+    required String description,
+    required bool hasVehicle,
+  }) {
+    state = state.copyWith(
+      legalType: legalType,
+      inn: inn,
+      companyName: companyName,
+      city: city,
+      address: address,
+      experience: experience,
+      description: description,
+      hasVehicle: hasVehicle,
+    );
+  }
+
+  void updateStep4({
+    required String bankName,
+    required String bankBik,
+    required String checkingAccount,
+    required String correspondentAccount,
+  }) {
+    state = state.copyWith(
+      bankName: bankName,
+      bankBik: bankBik,
+      checkingAccount: checkingAccount,
+      correspondentAccount: correspondentAccount,
+    );
+  }
+
+  void updateCategories(List<String> categoryIds) {
+    state = state.copyWith(selectedCategoryIds: categoryIds);
+  }
+
+  // Методы отправки, которые собирают данные из state и передают в API
+  Future<void> submitStep2ToServer() async {
+    final payload = {
+      'legalType': state.legalType?.toBackendString(),
+      'inn': state.inn,
+      'companyName': state.companyName,
+      'city': state.city,
+      'address': state.address,
+      'experience': state.experience,
+      'description': state.description,
+      'hasVehicle': state.hasVehicle,
+      'categoryIds': state.selectedCategoryIds,
+    };
+    await ref.read(registrationApiProvider).submitStep2(payload);
+  }
+
+  Future<void> submitStep4ToServer() async {
+    final payload = {
+      'bankName': state.bankName,
+      'bankBik': state.bankBik,
+      'checkingAccount': state.checkingAccount,
+      'correspondentAccount': state.correspondentAccount,
+    };
+    await ref.read(registrationApiProvider).submitStep4(payload);
+  }
+}
+
+// ==========================================
+// 4. API КОНТРОЛЛЕР (Работа с сетью)
+// ==========================================
 class RegistrationController {
   final ApiClient _api;
   final UploaderService _uploader;
@@ -57,7 +232,6 @@ class RegistrationController {
           )
           .toList();
 
-      // If the backend already returned a nested tree (subcategories populated), return root nodes
       final hasPrebuiltChildren = parsed.any((c) => c.subcategories.isNotEmpty);
       if (hasPrebuiltChildren) {
         return parsed
@@ -65,7 +239,6 @@ class RegistrationController {
             .toList();
       }
 
-      // Otherwise, group flat categories by `parentId` into a 2-level hierarchy
       final Map<String, List<CategoryModel>> childrenByParent = {};
       final List<CategoryModel> roots = [];
 
@@ -95,7 +268,6 @@ class RegistrationController {
     }
   }
 
-  /// Uses UploaderService to compress and upload KYC documents to MinIO/S3
   Future<String> uploadDocument(File file, String type) async {
     try {
       return await _uploader.uploadFileDirectly(

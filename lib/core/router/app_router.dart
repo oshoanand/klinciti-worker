@@ -21,6 +21,8 @@ import '../../features/registration/presentation/rejected_screen.dart';
 import '../../features/registration/presentation/step2_screen.dart';
 import '../../features/registration/presentation/step3_screen.dart';
 import '../../features/registration/presentation/step4_screen.dart';
+import '../../features/payments/presentation/linked_cards_screen.dart';
+import '../../features/payments/presentation/transactions_screen.dart';
 import '../../shared/layouts/main_scaffold.dart';
 import 'route_names.dart';
 
@@ -186,6 +188,18 @@ final routerProvider = Provider<GoRouter>((ref) {
           final jobId = state.pathParameters['id']!;
           return JobDetailScreen(jobId: jobId);
         },
+      ),
+
+      GoRoute(
+        path: AppRoutes.paymentMethods,
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) =>
+            const LinkedCardsScreen(isWorkerPayoutMode: true),
+      ),
+      GoRoute(
+        path: AppRoutes.workerTransactions,
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const WorkerTransactionsScreen(),
       ),
 
       // ==========================================

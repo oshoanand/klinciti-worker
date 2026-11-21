@@ -20,21 +20,49 @@ class Step2Screen extends ConsumerStatefulWidget {
 class _Step2ScreenState extends ConsumerState<Step2Screen> {
   final _formKey = GlobalKey<FormState>();
 
+  // Legal & Financial Fields
+  LegalType _legalType = LegalType.selfEmployed;
+  final _innController = TextEditingController();
+  final _companyController = TextEditingController();
+
+  // Professional Fields
   final _cityController = TextEditingController();
   final _addressController = TextEditingController();
   final _experienceController = TextEditingController();
   final _descriptionController = TextEditingController();
+
+  // Vehicle Fields
+  bool _hasVehicle = false;
   final _vehicleModelController = TextEditingController();
   final _vehicleNumberController = TextEditingController();
 
-  bool _hasVehicle = false;
   bool _isSubmitting = false;
 
   // Stores both selected main category IDs and subcategory IDs
   final Set<String> _selectedCategoryIds = {};
 
   @override
+  void initState() {
+    super.initState();
+    // Pre-fill from Riverpod state if returning from a future step
+    final state = ref.read(registrationProvider);
+    _legalType = state.legalType ?? LegalType.selfEmployed;
+    if (state.inn != null) _innController.text = state.inn!;
+    if (state.companyName != null) _companyController.text = state.companyName!;
+    if (state.city != null) _cityController.text = state.city!;
+    if (state.address != null) _addressController.text = state.address!;
+    if (state.experience != null)
+      _experienceController.text = state.experience!;
+    if (state.description != null)
+      _descriptionController.text = state.description!;
+    _hasVehicle = state.hasVehicle ?? false;
+    _selectedCategoryIds.addAll(state.selectedCategoryIds);
+  }
+
+  @override
   void dispose() {
+    _innController.dispose();
+    _companyController.dispose();
     _cityController.dispose();
     _addressController.dispose();
     _experienceController.dispose();
@@ -100,26 +128,33 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
       return;
     }
 
+    // 1. Update the local Riverpod state so data is preserved for Step 3 & 4
+    ref
+        .read(registrationProvider.notifier)
+        .updateStep2(
+          legalType: _legalType,
+          inn: _innController.text.trim(),
+          companyName: _legalType == LegalType.selfEmployed
+              ? null
+              : _companyController.text.trim(),
+          city: _cityController.text.trim(),
+          address: _addressController.text.trim(),
+          experience: _experienceController.text.trim(),
+          description: _descriptionController.text.trim(),
+          hasVehicle: _hasVehicle,
+        );
+
+    ref
+        .read(registrationProvider.notifier)
+        .updateCategories(_selectedCategoryIds.toList());
+
     setState(() => _isSubmitting = true);
 
     try {
-      final descText = _descriptionController.text.trim();
+      // 2. Submit Step 2 to backend
+      await ref.read(registrationProvider.notifier).submitStep2ToServer();
 
-      final payload = <String, dynamic>{
-        'city': _cityController.text.trim(),
-        'address': _addressController.text.trim(),
-        'hasVehicle': _hasVehicle,
-        if (_hasVehicle) ...{
-          'vehicleModel': _vehicleModelController.text.trim(),
-          'vehicleNumber': _vehicleNumberController.text.trim().toUpperCase(),
-        },
-        'experience': _experienceController.text.trim(),
-        if (descText.isNotEmpty) 'description': descText,
-        'categoryIds': _selectedCategoryIds.toList(),
-      };
-
-      await ref.read(registrationProvider).submitStep2(payload);
-
+      // 3. Update local auth user state so if app reloads, it opens at Step 3
       final currentUser = ref.read(currentUserProvider);
       if (currentUser != null) {
         ref.read(currentUserProvider.notifier).state = {
@@ -296,6 +331,8 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
   @override
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(categoriesTreeProvider);
+    final isOOO = _legalType == LegalType.ooo;
+    final innLength = isOOO ? 10 : 12;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -304,10 +341,10 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
         surfaceTintColor: Colors.white,
         elevation: 0,
         title: const Text(
-          'Профиль и услуги (Шаг 2/4)',
+          'Юридический профиль (Шаг 2/4)',
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            fontSize: 18,
+            fontSize: 17,
             color: Color(0xFF0F172A),
           ),
         ),
@@ -318,6 +355,102 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
+            // ==========================================
+            // LEGAL STATUS SECTION
+            // ==========================================
+            const Text(
+              'Форма занятости',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Выберите ваш налоговый статус согласно законодательству РФ. Это потребуется для B2B выплат.',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            DropdownButtonFormField<LegalType>(
+              value: _legalType,
+              decoration: _inputDecoration(
+                label: 'Правовой статус *',
+                icon: LucideIcons.briefcase,
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: LegalType.selfEmployed,
+                  child: Text('Самозанятый (НПД)'),
+                ),
+                DropdownMenuItem(
+                  value: LegalType.ip,
+                  child: Text('ИП (Индивидуальный предприниматель)'),
+                ),
+                DropdownMenuItem(
+                  value: LegalType.ooo,
+                  child: Text('ООО (Юридическое лицо)'),
+                ),
+              ],
+              onChanged: (val) {
+                if (val != null) {
+                  setState(() {
+                    _legalType = val;
+                    _innController.clear(); // Clear INN on type change because length validation changes
+                  });
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+
+            TextFormField(
+              controller: _innController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              maxLength: innLength,
+              decoration: _inputDecoration(
+                label: 'ИНН *',
+                hint: isOOO ? '10 цифр' : '12 цифр',
+                icon: LucideIcons.file_text,
+              ).copyWith(counterText: ''),
+              validator: (val) {
+                if (val == null || val.isEmpty) return 'Введите ИНН';
+                if (val.length != innLength)
+                  return 'ИНН должен содержать $innLength цифр';
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+
+            if (_legalType != LegalType.selfEmployed) ...[
+              TextFormField(
+                controller: _companyController,
+                textCapitalization: TextCapitalization.words,
+                decoration: _inputDecoration(
+                  label: _legalType == LegalType.ip
+                      ? 'Полное наименование ИП *'
+                      : 'Название ООО *',
+                  hint: _legalType == LegalType.ip
+                      ? 'ИП Иванов Иван Иванович'
+                      : 'ООО "Ромашка"',
+                  icon: LucideIcons.building,
+                ),
+                validator: (val) => val == null || val.trim().isEmpty
+                    ? 'Обязательное поле'
+                    : null,
+              ),
+            ],
+
+            const SizedBox(height: 32),
+
+            // ==========================================
+            // PROFESSIONAL DETAILS SECTION
+            // ==========================================
             const Text(
               'Основная информация',
               style: TextStyle(
@@ -343,7 +476,7 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
               controller: _addressController,
               textCapitalization: TextCapitalization.sentences,
               decoration: _inputDecoration(
-                label: 'Адрес проживания *',
+                label: 'Адрес проживания / Офиса *',
                 hint: 'Улица, дом',
                 icon: LucideIcons.map_pin,
               ),
@@ -358,7 +491,7 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
               decoration: _inputDecoration(
                 label: 'Опыт работы (полных лет) *',
                 hint: 'Например: 3',
-                icon: LucideIcons.briefcase,
+                icon: LucideIcons.calendar,
               ),
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return 'Укажите опыт работы';
@@ -371,7 +504,6 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
             ),
             const SizedBox(height: 16),
 
-            // ✅ NEW: Optional Worker Self-Description (Bio)
             TextFormField(
               controller: _descriptionController,
               maxLines: 3,
@@ -379,10 +511,13 @@ class _Step2ScreenState extends ConsumerState<Step2Screen> {
               maxLength: 1000,
               textCapitalization: TextCapitalization.sentences,
               decoration: _inputDecoration(
-                label: 'О себе и своем опыте (необязательно)',
+                label: 'О себе и своем опыте (обязательно)',
                 hint: 'Расскажите о своих навыках, инструментах и выполненных работах...',
-                icon: LucideIcons.file_text,
+                icon: LucideIcons.clipboard_list,
               ),
+              validator: (v) => v == null || v.trim().length < 10
+                  ? 'Напишите подробнее (минимум 10 символов)'
+                  : null,
             ),
             const SizedBox(height: 12),
 

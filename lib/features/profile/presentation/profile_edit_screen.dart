@@ -8,13 +8,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exceptions.dart';
-import '../../../core/network/uploader_service.dart';
-import '../../../shared/layouts/profile_drawer.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../registration/data/category_model.dart';
 import '../../registration/providers/registration_provider.dart';
+import '../providers/profile_provider.dart';
 
 typedef JsonMap = Map<String, dynamic>;
 typedef StringSet = Set<String>;
@@ -30,31 +28,44 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
   final _formKey = GlobalKey<FormState>();
   final ImagePicker _picker = ImagePicker();
 
+  // Personal Fields
   final _firstNameController = TextEditingController();
   final _middleNameController = TextEditingController();
   final _lastNameController = TextEditingController();
+  String? _gender; // 'MALE' | 'FEMALE' | null
+  String? _avatarUrl;
+  File? _localAvatarFile;
+
+  // Legal & Financial Fields (Russian Compliance)
+  LegalType _legalType = LegalType.selfEmployed;
+  final _innController = TextEditingController();
+  final _companyController = TextEditingController();
+  final _bankNameController = TextEditingController();
+  final _bankBikController = TextEditingController();
+  final _checkingAccountController = TextEditingController();
+  final _correspondentAccountController = TextEditingController();
+
+  // Professional & Vehicle Fields
   final _cityController = TextEditingController();
   final _addressController = TextEditingController();
   final _experienceController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _vehicleModelController = TextEditingController();
   final _vehicleNumberController = TextEditingController();
-
-  bool _isLoadingProfile = true;
-  bool _isSaving = false;
-  bool _isUploadingAvatar = false;
   bool _hasVehicle = false;
 
-  String? _gender; // 'MALE' | 'FEMALE' | null
-  String? _avatarUrl;
-  File? _localAvatarFile;
-
   final StringSet _selectedCategoryIds = <String>{};
+
+  bool _isLoadingProfile = true;
+  bool _isUploadingAvatar = false;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _loadWorkerProfile();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadWorkerProfile();
+    });
   }
 
   @override
@@ -62,6 +73,12 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
     _firstNameController.dispose();
     _middleNameController.dispose();
     _lastNameController.dispose();
+    _innController.dispose();
+    _companyController.dispose();
+    _bankNameController.dispose();
+    _bankBikController.dispose();
+    _checkingAccountController.dispose();
+    _correspondentAccountController.dispose();
     _cityController.dispose();
     _addressController.dispose();
     _experienceController.dispose();
@@ -72,48 +89,33 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
   }
 
   // ==========================================
-  // 1. FETCH INITIAL WORKER PROFILE
+  // 1. FETCH INITIAL WORKER PROFILE VIA PROVIDER
   // ==========================================
   Future<void> _loadWorkerProfile() async {
     setState(() => _isLoadingProfile = true);
 
     try {
-      final api = ref.read(apiClientProvider);
-      final response = await api.dio.get('/workers/profile');
+      final profile = await ref
+          .read(profileMutationProvider.notifier)
+          .fetchProfileForEdit();
       if (!mounted) return;
 
-      final data = response.data is Map
-          ? JsonMap.from(response.data as Map)
-          : JsonMap();
-
-      // Fallback to cached user data if any field is missing
       final cachedUser = ref.read(currentUserProvider) ?? JsonMap();
 
-      String firstName =
-          (data['first_name'] ??
-                  data['firstName'] ??
-                  cachedUser['first_name'] ??
-                  '')
-              .toString()
-              .trim();
+      String firstName = (profile.firstName ?? cachedUser['first_name'] ?? '')
+          .toString()
+          .trim();
       String middleName =
-          (data['middle_name'] ??
-                  data['middleName'] ??
-                  cachedUser['middle_name'] ??
-                  '')
+          (profile.middleName ?? cachedUser['middle_name'] ?? '')
               .toString()
               .trim();
-      String lastName =
-          (data['last_name'] ??
-                  data['lastName'] ??
-                  cachedUser['last_name'] ??
-                  '')
-              .toString()
-              .trim();
+      String lastName = (profile.lastName ?? cachedUser['last_name'] ?? '')
+          .toString()
+          .trim();
 
-      // If first_name / last_name were not split yet, split `name`
+      // Split full name if first/last names were not stored separately yet
       if (firstName.isEmpty && lastName.isEmpty) {
-        final fullName = (data['name'] ?? cachedUser['name'] ?? '')
+        final fullName = (profile.name ?? cachedUser['name'] ?? '')
             .toString()
             .trim();
         if (fullName.isNotEmpty) {
@@ -130,70 +132,71 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
       _firstNameController.text = firstName;
       _middleNameController.text = middleName;
       _lastNameController.text = lastName;
+      _avatarUrl = profile.image ?? cachedUser['image']?.toString();
 
-      _cityController.text = (data['city'] ?? '').toString().trim();
-      _addressController.text = (data['address'] ?? '').toString().trim();
-
-      // Safely normalize `experience` whether String, num, or legacy List
-      final rawExp = data['experience'];
-      if (rawExp is List) {
-        _experienceController.text = rawExp.isNotEmpty
-            ? rawExp.first.toString().trim()
-            : '';
-      } else if (rawExp != null) {
-        _experienceController.text = rawExp.toString().trim();
-      } else {
-        _experienceController.text = '';
-      }
-
-      // Load optional `description`
-      _descriptionController.text = (data['description'] ?? '')
-          .toString()
-          .trim();
-
-      _hasVehicle = data['has_vehicle'] == true || data['hasVehicle'] == true;
-      _vehicleModelController.text =
-          (data['vehicle_model'] ?? data['vehicleModel'] ?? '')
-              .toString()
-              .trim();
-      _vehicleNumberController.text =
-          (data['vehicle_number'] ?? data['vehicleNumber'] ?? '')
-              .toString()
-              .trim();
-
-      final rawGender = data['gender']?.toString().toUpperCase();
+      final rawGender = profile.gender?.toUpperCase();
       if (rawGender == 'MALE' || rawGender == 'FEMALE') {
         _gender = rawGender;
       }
 
-      _avatarUrl = (data['image'] ?? data['photo'] ?? cachedUser['image'])
-          ?.toString();
+      // Legal & Banking
+      switch (profile.legalType.toUpperCase()) {
+        case 'IP':
+          _legalType = LegalType.ip;
+          break;
+        case 'OOO':
+          _legalType = LegalType.ooo;
+          break;
+        default:
+          _legalType = LegalType.selfEmployed;
+      }
 
-      final rawCats = data['categoryIds'] ?? data['category_ids'];
-      if (rawCats is List) {
-        _selectedCategoryIds
-          ..clear()
-          ..addAll(rawCats.map((e) => e.toString()));
+      _innController.text = (profile.inn ?? '').trim();
+      _companyController.text = (profile.companyName ?? '').trim();
+      _bankNameController.text = (profile.bankName ?? '').trim();
+      _bankBikController.text = (profile.bankBik ?? '').trim();
+      _checkingAccountController.text = (profile.checkingAccount ?? '').trim();
+      _correspondentAccountController.text =
+          (profile.correspondentAccount ?? '').trim();
+
+      // Professional & Vehicle
+      _cityController.text = (profile.city ?? '').trim();
+      _addressController.text = (profile.address ?? '').trim();
+      _experienceController.text = (profile.experience ?? '').trim();
+      _descriptionController.text = (profile.description ?? '').trim();
+
+      _hasVehicle = profile.hasVehicle;
+      _vehicleModelController.text = (profile.vehicleModel ?? '').trim();
+      _vehicleNumberController.text = (profile.vehicleNumber ?? '').trim();
+
+      _selectedCategoryIds
+        ..clear()
+        ..addAll(profile.categoryIds);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Не удалось загрузить профиль: ${e.message}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        final msg = ApiException.fromDioException(e).message;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Не удалось загрузить профиль: $msg'),
+            content: Text('Ошибка загрузки профиля: $e'),
             backgroundColor: Colors.red,
           ),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _isLoadingProfile = false);
-      }
+      if (mounted) setState(() => _isLoadingProfile = false);
     }
   }
 
   // ==========================================
-  // 2. AVATAR UPLOAD TO MINIO
+  // 2. AVATAR UPLOAD VIA PROVIDER
   // ==========================================
   Future<void> _pickAndUploadAvatar() async {
     final ImageSource? source = await showModalBottomSheet<ImageSource>(
@@ -250,45 +253,33 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
         _localAvatarFile = file;
         _isUploadingAvatar = true;
       });
-      ref.read(isAvatarUploadingProvider.notifier).state = true;
 
-      final uploader = ref.read(uploaderServiceProvider);
-      final uploadedUrl = await uploader.uploadFileDirectly(
-        file: file,
-        endpoint: '/workers/profile/upload-url',
-        payloadData: {'folder': 'avatars'},
-        compress: true,
-        imageContext: 'avatar',
-        isGetRequest: false,
-      );
+      final uploadedUrl = await ref
+          .read(profileMutationProvider.notifier)
+          .uploadAndSetAvatar(file);
 
       if (!mounted) return;
-
       setState(() => _avatarUrl = uploadedUrl);
-
-      // Immediately update avatar in currentUserProvider so Drawer reflects it
-      final currentUser = ref.read(currentUserProvider);
-      if (currentUser != null) {
-        ref.read(currentUserProvider.notifier).state = {
-          ...currentUser,
-          'image': uploadedUrl,
-        };
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка загрузки фото: ${e.message}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        final msg = ApiException.fromDioException(e).message;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Ошибка загрузки фото: $msg'),
+            content: Text('Ошибка загрузки фото: $e'),
             backgroundColor: Colors.red,
           ),
         );
       }
     } finally {
-      ref.read(isAvatarUploadingProvider.notifier).state = false;
-      if (mounted) {
-        setState(() => _isUploadingAvatar = false);
-      }
+      if (mounted) setState(() => _isUploadingAvatar = false);
     }
   }
 
@@ -333,7 +324,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
   }
 
   // ==========================================
-  // 4. SAVE PROFILE TO PUT /workers/profile
+  // 4. SAVE PROFILE VIA PROVIDER
   // ==========================================
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
@@ -348,25 +339,44 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
       return;
     }
 
-    setState(() => _isSaving = true);
+    setState(() => _errorMessage = null);
 
     try {
       final firstName = _firstNameController.text.trim();
       final middleName = _middleNameController.text.trim();
       final lastName = _lastNameController.text.trim();
-      final city = _cityController.text.trim();
-      final address = _addressController.text.trim();
-      final experience = _experienceController.text.trim();
       final description = _descriptionController.text.trim();
+      final bankName = _bankNameController.text.trim();
+      final bankBik = _bankBikController.text.trim();
+      final checkingAccount = _checkingAccountController.text.trim();
+      final correspondentAccount = _correspondentAccountController.text.trim();
 
       final payload = <String, dynamic>{
+        // Personal Info
         'firstName': firstName,
         'middleName': middleName.isEmpty ? null : middleName,
         'lastName': lastName,
-        'city': city,
-        'address': address,
-        'experience': experience, // Sent as clean String
-        'description': description.isEmpty ? null : description, // Optional bio
+        if (_gender != null) 'gender': _gender,
+        if (_avatarUrl != null && _avatarUrl!.isNotEmpty) 'image': _avatarUrl,
+
+        // Legal & Russian Banking Details
+        'legalType': _legalType.toBackendString(),
+        'inn': _innController.text.trim(),
+        'companyName': _legalType != LegalType.selfEmployed
+            ? _companyController.text.trim()
+            : null,
+        'bankName': bankName.isEmpty ? null : bankName,
+        'bankBik': bankBik.isEmpty ? null : bankBik,
+        'checkingAccount': checkingAccount.isEmpty ? null : checkingAccount,
+        'correspondentAccount': correspondentAccount.isEmpty
+            ? null
+            : correspondentAccount,
+
+        // Professional & Vehicle Info
+        'city': _cityController.text.trim(),
+        'address': _addressController.text.trim(),
+        'experience': _experienceController.text.trim(),
+        'description': description.isEmpty ? null : description,
         'hasVehicle': _hasVehicle,
         'vehicleModel': _hasVehicle
             ? _vehicleModelController.text.trim()
@@ -374,61 +384,36 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
         'vehicleNumber': _hasVehicle
             ? _vehicleNumberController.text.trim().toUpperCase()
             : null,
-        if (_gender != null) 'gender': _gender,
-        if (_avatarUrl != null && _avatarUrl!.isNotEmpty) 'image': _avatarUrl,
         'categoryIds': _selectedCategoryIds.toList(),
       };
 
-      final api = ref.read(apiClientProvider);
-      await api.dio.patch('/workers/profile', data: payload);
-
-      // Sync updated fields into currentUserProvider
-      final currentUser = ref.read(currentUserProvider) ?? JsonMap();
-      final fullName = [
-        firstName,
-        middleName,
-        lastName,
-      ].where((part) => part.isNotEmpty).join(' ');
-
-      ref.read(currentUserProvider.notifier).state = {
-        ...currentUser,
-        'name': fullName,
-        'first_name': firstName,
-        'middle_name': middleName,
-        'last_name': lastName,
-        'city': city,
-        'address': address,
-        'experience': experience,
-        'description': description.isEmpty ? null : description,
-        if (_avatarUrl != null) 'image': _avatarUrl,
-      };
+      final result = await ref
+          .read(profileMutationProvider.notifier)
+          .updateProfile(payload);
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Профиль успешно сохранен'),
-          backgroundColor: Colors.green,
-        ),
+        SnackBar(content: Text(result.message), backgroundColor: Colors.green),
       );
 
       if (context.canPop()) {
         context.pop();
       }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _errorMessage = e.message);
+      }
     } catch (e) {
       if (mounted) {
-        final msg = ApiException.fromDioException(e).message;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isSaving = false);
+        setState(() => _errorMessage = 'Ошибка сохранения: $e');
       }
     }
   }
 
+  // ==========================================
+  // UI HELPERS
+  // ==========================================
   InputDecoration _inputDecoration({
     required String label,
     String? hint,
@@ -525,10 +510,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
               value: allSubsSelected
                   ? true
                   : (someSubsSelected ? null : isMainSelected),
-              onChanged: (val) {
-                final shouldSelectAll = !allSubsSelected;
-                _toggleMainCategory(mainCat, shouldSelectAll);
-              },
+              onChanged: (_) => _toggleMainCategory(mainCat, !allSubsSelected),
             ),
             title: Text(
               mainCat.name,
@@ -568,11 +550,17 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
     );
   }
 
+  // ==========================================
+  // BUILD METHOD
+  // ==========================================
   @override
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(categoriesTreeProvider);
+    final isMutating = ref.watch(profileMutationProvider);
     final hasNetworkAvatar =
         _avatarUrl != null && _avatarUrl!.trim().isNotEmpty;
+    final isOOO = _legalType == LegalType.ooo;
+    final innLength = isOOO ? 10 : 12;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -699,17 +687,6 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
-                      controller: _firstNameController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: _inputDecoration(
-                        label: 'Имя *',
-                        icon: LucideIcons.user,
-                      ),
-                      validator: (v) =>
-                          v == null || v.trim().isEmpty ? 'Укажите имя' : null,
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
                       controller: _lastNameController,
                       textCapitalization: TextCapitalization.words,
                       decoration: _inputDecoration(
@@ -722,6 +699,17 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                     ),
                     const SizedBox(height: 14),
                     TextFormField(
+                      controller: _firstNameController,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: _inputDecoration(
+                        label: 'Имя *',
+                        icon: LucideIcons.user,
+                      ),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? 'Укажите имя' : null,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
                       controller: _middleNameController,
                       textCapitalization: TextCapitalization.words,
                       decoration: _inputDecoration(
@@ -730,10 +718,8 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       ),
                     ),
                     const SizedBox(height: 14),
-
-                    // Gender Selector
                     DropdownButtonFormField<String>(
-                      value: _gender,
+                      initialValue: _gender,
                       decoration: _inputDecoration(
                         label: 'Пол (необязательно)',
                         icon: LucideIcons.users,
@@ -749,6 +735,175 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                     ),
 
                     const SizedBox(height: 28),
+
+                    // ==========================================
+                    // LEGAL & FINANCIAL INFO
+                    // ==========================================
+                    const Text(
+                      'Юридический статус и реквизиты',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<LegalType>(
+                      initialValue: _legalType,
+                      decoration: _inputDecoration(
+                        label: 'Правовой статус *',
+                        icon: LucideIcons.briefcase,
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: LegalType.selfEmployed,
+                          child: Text('Самозанятый (НПД)'),
+                        ),
+                        DropdownMenuItem(
+                          value: LegalType.ip,
+                          child: Text('ИП (Индивидуальный предприниматель)'),
+                        ),
+                        DropdownMenuItem(
+                          value: LegalType.ooo,
+                          child: Text('ООО (Юридическое лицо)'),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val != null && val != _legalType) {
+                          setState(() {
+                            final oldWasOOO = _legalType == LegalType.ooo;
+                            final newIsOOO = val == LegalType.ooo;
+                            _legalType = val;
+                            // Clear INN only if switching between 10-digit (OOO) and 12-digit (IP/Self-Employed)
+                            if (oldWasOOO != newIsOOO) {
+                              _innController.clear();
+                            }
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _innController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      maxLength: innLength,
+                      decoration: _inputDecoration(
+                        label: 'ИНН *',
+                        hint: isOOO ? '10 цифр' : '12 цифр',
+                        icon: LucideIcons.file_text,
+                      ).copyWith(counterText: ''),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) {
+                          return 'Введите ИНН';
+                        }
+                        if (val.trim().length != innLength) {
+                          return 'ИНН должен содержать $innLength цифр';
+                        }
+                        return null;
+                      },
+                    ),
+                    if (_legalType != LegalType.selfEmployed) ...[
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _companyController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: _inputDecoration(
+                          label: _legalType == LegalType.ip
+                              ? 'Полное наименование ИП *'
+                              : 'Название ООО *',
+                          hint: _legalType == LegalType.ip
+                              ? 'ИП Иванов Иван Иванович'
+                              : 'ООО "Ромашка"',
+                          icon: LucideIcons.building,
+                        ),
+                        validator: (val) => val == null || val.trim().isEmpty
+                            ? 'Обязательное поле'
+                            : null,
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _bankNameController,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: _inputDecoration(
+                        label: 'Название банка *',
+                        hint: 'Например: ПАО Сбербанк',
+                        icon: LucideIcons.landmark,
+                      ),
+                      validator: (val) => val == null || val.trim().isEmpty
+                          ? 'Укажите название банка'
+                          : null,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _bankBikController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      maxLength: 9,
+                      decoration: _inputDecoration(
+                        label: 'БИК банка *',
+                        hint: '9 цифр',
+                        icon: LucideIcons.hash,
+                      ).copyWith(counterText: ''),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) {
+                          return 'Введите БИК банка';
+                        }
+                        if (val.trim().length != 9) {
+                          return 'БИК должен содержать ровно 9 цифр';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _checkingAccountController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      maxLength: 20,
+                      decoration: _inputDecoration(
+                        label: 'Расчетный счет (р/с) *',
+                        hint: '20 цифр',
+                        icon: LucideIcons.wallet,
+                      ).copyWith(counterText: ''),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) {
+                          return 'Введите расчетный счет';
+                        }
+                        if (val.trim().length != 20) {
+                          return 'Расчетный счет должен содержать 20 цифр';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _correspondentAccountController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      maxLength: 20,
+                      decoration: _inputDecoration(
+                        label: 'Корреспондентский счет (к/с) *',
+                        hint: '20 цифр (начинается с 301)',
+                        icon: LucideIcons.arrow_right_left,
+                      ).copyWith(counterText: ''),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) {
+                          return 'Введите корр. счет';
+                        }
+                        if (val.trim().length != 20) {
+                          return 'Корр. счет должен содержать 20 цифр';
+                        }
+                        return null;
+                      },
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    // ==========================================
+                    // PROFESSIONAL DATA
+                    // ==========================================
                     const Text(
                       'Профессиональные данные',
                       style: TextStyle(
@@ -791,7 +946,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       decoration: _inputDecoration(
                         label: 'Опыт работы (полных лет) *',
                         hint: 'Например: 3',
-                        icon: LucideIcons.briefcase,
+                        icon: LucideIcons.calendar,
                       ),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) {
@@ -805,8 +960,6 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       },
                     ),
                     const SizedBox(height: 14),
-
-                    // Optional Worker Description / Bio
                     TextFormField(
                       controller: _descriptionController,
                       maxLines: 4,
@@ -814,14 +967,16 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       maxLength: 1000,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: _inputDecoration(
-                        label: 'О себе и своем опыте (необязательно)',
+                        label: 'О себе и своем опыте',
                         hint: 'Расскажите о своих навыках, наличии профессионального инструмента и выполненных работах...',
                         icon: LucideIcons.file_text,
                       ),
                     ),
                     const SizedBox(height: 12),
 
-                    // Vehicle Toggle & Inputs
+                    // ==========================================
+                    // VEHICLE TOGGLE & INPUTS
+                    // ==========================================
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -834,7 +989,8 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       ),
                       child: SwitchListTile.adaptive(
                         contentPadding: EdgeInsets.zero,
-                        activeColor: const Color(0xFF0F172A),
+                        activeThumbColor: Colors.white,
+                        activeTrackColor: const Color(0xFF0F172A),
                         title: const Text(
                           'Есть личный автомобиль',
                           style: TextStyle(
@@ -886,6 +1042,10 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                     ],
 
                     const SizedBox(height: 28),
+
+                    // ==========================================
+                    // CATEGORIES
+                    // ==========================================
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -946,7 +1106,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                             const SizedBox(height: 8),
                             OutlinedButton.icon(
                               onPressed: () =>
-                                  ref.refresh(categoriesTreeProvider),
+                                  ref.invalidate(categoriesTreeProvider),
                               icon: const Icon(Icons.refresh),
                               label: const Text('Повторить'),
                             ),
@@ -956,11 +1116,29 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                       data: _buildCategoryTree,
                     ),
 
+                    if (_errorMessage != null) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          _errorMessage!,
+                          style: TextStyle(
+                            color: Colors.red.shade800,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+
                     const SizedBox(height: 28),
                     SizedBox(
                       height: 54,
                       child: ElevatedButton(
-                        onPressed: (_isSaving || _isUploadingAvatar)
+                        onPressed: (isMutating || _isUploadingAvatar)
                             ? null
                             : _saveProfile,
                         style: ElevatedButton.styleFrom(
@@ -970,7 +1148,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                             borderRadius: BorderRadius.circular(16),
                           ),
                         ),
-                        child: _isSaving
+                        child: isMutating
                             ? const SizedBox(
                                 width: 22,
                                 height: 22,

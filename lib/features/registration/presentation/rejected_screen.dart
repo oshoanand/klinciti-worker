@@ -43,7 +43,7 @@ class _RejectedScreenState extends ConsumerState<RejectedScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final status = await ref.read(registrationProvider).checkStatus();
+      final status = await ref.read(registrationApiProvider).checkStatus();
       if (!mounted) return;
 
       final modStatus =

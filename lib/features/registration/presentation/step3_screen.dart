@@ -204,7 +204,7 @@ class _Step3ScreenState extends ConsumerState<Step3Screen> {
       });
 
       final publicUrl = await ref
-          .read(registrationProvider)
+          .read(registrationApiProvider)
           .uploadDocument(file, docType);
 
       if (!mounted) return;
@@ -318,7 +318,7 @@ class _Step3ScreenState extends ConsumerState<Step3Screen> {
           'driversLicenseUrl': _uploadedUrls['drivers_license'],
       };
 
-      await ref.read(registrationProvider).submitStep3(payload);
+      await ref.read(registrationApiProvider).submitStep3(payload);
 
       // Update local user state so onboardingStep is in sync
       final currentUser = ref.read(currentUserProvider);
